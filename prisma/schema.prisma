@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Currency {
+  code      String   @id @db.Char(3)
+  exponent  Int      @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("currencies")
+}
+
+model FxRate {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  baseCurrency  String   @map("base_currency") @db.Char(3)
+  quoteCurrency String   @map("quote_currency") @db.Char(3)
+  rate          Decimal  @db.Decimal(20, 10)
+  source        String
+  validAt       DateTime @map("valid_at") @db.Timestamptz
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([baseCurrency, quoteCurrency, validAt(sort: Desc)], name: "fx_rates_pair_valid_at_idx")
+  @@map("fx_rates")
+}
+
+model Program {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  externalRef      String @unique @map("external_ref")
+  currency         String @db.Char(3)
+  currencyExponent Int    @map("currency_exponent") @db.SmallInt
+
+  totalLimitMinor     BigInt @map("total_limit_minor")
+  reservedAmountMinor BigInt @default(0) @map("reserved_amount_minor")
+
+  status  String @default("ACTIVE")
+  version BigInt @default(0)
+
+  treasuryVersion     BigInt?   @map("treasury_version")
+  lastTreasuryEventAt DateTime? @map("last_treasury_event_at") @db.Timestamptz
+  lastReconciledAt    DateTime? @map("last_reconciled_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  reservations       InvoiceReservation[]
+  ledgerEntries      CapacityLedgerEntry[]
+  reconciliationRuns ReconciliationRun[]
+
+  @@map("programs")
+}
+
+model InvoiceReservation {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  programId String  @map("program_id") @db.Uuid
+  program   Program @relation(fields: [programId], references: [id])
+
+  invoiceId               String @map("invoice_id")
+  invoiceCurrency         String @map("invoice_currency") @db.Char(3)
+  invoiceCurrencyExponent Int    @map("invoice_currency_exponent") @db.SmallInt
+  invoiceAmountMinor      BigInt @map("invoice_amount_minor")
+
+  programCurrency         String @map("program_currency") @db.Char(3)
+  programCurrencyExponent Int    @map("program_currency_exponent") @db.SmallInt
+  reservedAmountMinor     BigInt @map("reserved_amount_minor")
+
+  fxRate        Decimal  @map("fx_rate") @db.Decimal(20, 10)
+  fxRateSource  String   @map("fx_rate_source")
+  fxRateValidAt DateTime @map("fx_rate_valid_at") @db.Timestamptz
+
+  status String
+
+  source                  String    @default("API")
+  reconciledAt            DateTime? @map("reconciled_at") @db.Timestamptz
+  reconciliationMessageId String?   @map("reconciliation_message_id")
+
+  releasedAt  DateTime? @map("released_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  ledgerEntries CapacityLedgerEntry[]
+
+  @@unique([programId, invoiceId])
+  @@map("invoice_reservations")
+}
+
+model CapacityLedgerEntry {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  programId String  @map("program_id") @db.Uuid
+  program   Program @relation(fields: [programId], references: [id])
+
+  reservationId String?             @map("reservation_id") @db.Uuid
+  reservation   InvoiceReservation? @relation(fields: [reservationId], references: [id])
+
+  eventType   String @map("event_type")
+  amountMinor BigInt @map("amount_minor")
+  currency    String @db.Char(3)
+
+  source            String
+  externalMessageId String? @map("external_message_id")
+  metadata          Json    @default("{}")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("capacity_ledger")
+}
+
+model ReconciliationRun {
+  id                String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  externalMessageId String  @unique @map("external_message_id")
+  programId         String  @map("program_id") @db.Uuid
+  program           Program @relation(fields: [programId], references: [id])
+
+  treasuryTotalLimitMinor     BigInt @map("treasury_total_limit_minor")
+  treasuryReservedAmountMinor BigInt @map("treasury_reserved_amount_minor")
+
+  localTotalLimitMinorBefore     BigInt @map("local_total_limit_minor_before")
+  localReservedAmountMinorBefore BigInt @map("local_reserved_amount_minor_before")
+
+  totalLimitDifferenceMinor BigInt @map("total_limit_difference_minor")
+  reservedDifferenceMinor   BigInt @map("reserved_difference_minor")
+
+  status String
+
+  occurredAt  DateTime @map("occurred_at") @db.Timestamptz
+  processedAt DateTime @default(now()) @map("processed_at") @db.Timestamptz
+
+  metadata Json @default("{}")
+
+  @@map("reconciliation_runs")
+}
+
+model ProcessedKafkaMessage {
+  id                 String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageType        String  @map("message_type")
+  programExternalRef String  @map("program_external_ref")
+
+  topic             String
+  partition         Int
+  offsetValue       BigInt  @map("offset_value")
+  externalMessageId String  @map("external_message_id")
+  payloadHash       String  @map("payload_hash")
+
+  processedAt DateTime @default(now()) @map("processed_at") @db.Timestamptz
+
+  @@unique([topic, partition, offsetValue])
+  @@unique([externalMessageId])
+  @@map("processed_kafka_messages")
+}
